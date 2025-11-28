@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<title>Catchy — Juego en un solo archivo</title>
+<style>
+  :root{
+    --bg:#0f1724;
+    --panel:#0b1220aa;
+    --accent:#ffd166;
+    --accent2:#06d6a0;
+    --muted:#94a3b8;
+  }
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,'Helvetica Neue',Arial;}
+  body{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:linear-gradient(180deg,var(--bg) 0%, #081022 100%);
+    color:#e6eef8;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .wrap{
+    width:min(960px,96vw);
+    height:min(640px,88vh);
+    display:flex;
+    gap:12px;
+    align-items:stretch;
+  }
+  canvas{
+    flex:1 1 auto;
+    background: linear-gradient(180deg,#071028 0%, #05202a 100%);
+    border-radius:12px;
+    box-shadow: 0 10px 30px rgba(2,6,23,0.6);
+    touch-action: none;
+  }
+  .hud{
+    width:260px;
+    min-width:200px;
+    background:var(--panel);
+    border-radius:12px;
+    padding:14px;
+    box-sizing:border-box;
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+    align-items:stretch;
+  }
+  h1{margin:0;font-size:18px;letter-spacing:0.6px}
+  .row{display:flex;gap:8px;align-items:center;justify-content:space-between}
+  .big{font-weight:700;font-size:22px}
+  .muted{color:var(--muted);font-size:13px}
+  button{
+    background:linear-gradient(180deg,var(--accent) 0%, #ffbf69 100%);
+    border:none;padding:8px 12px;border-radius:10px;font-weight:600;
+    box-shadow:0 6px 12px rgba(0,0,0,0.35);cursor:pointer;
+  }
+  button.secondary{
+    background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--muted);
+  }
+  .controls{display:flex;gap:8px;flex-wrap:wrap}
+  .hint{font-size:13px;color:var(--muted)}
+  footer{margin-top:auto;font-size:12px;color:var(--muted);text-align:center}
+  @media (max-width:720px){
+    .wrap{flex-direction:column;height:92vh}
+    .hud{width:100%;min-width:unset;order:2}
+    canvas{order:1;height:58vh;border-bottom-left-radius:0;border-bottom-right-radius:0}
+  }
+</style>
+</head>
+<body>
+<div class="wrap" role="application" aria-label="Juego Catchy">
+  <canvas id="game" aria-label="Área de juego"></canvas>
+  <aside class="hud" aria-label="Panel de control">
+    <h1>Catchy — ¡Atrapa las estrellas!</h1>
+    <div class="row">
+      <div>
+        <div class="muted">Puntuación</div>
+        <div id="score" class="big">0</div>
+      </div>
+      <div>
+        <div class="muted">Mejor</div>
+        <div id="best" class="big">0</div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="muted">Vidas</div>
+        <div id="lives" class="big">3</div>
+      </div>
+      <div>
+        <div class="muted">Nivel</div>
+        <div id="level" class="big">1</div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button id="startBtn">Iniciar</button>
+      <button id="pauseBtn" class="secondary">Pausar</button>
+      <button id="resetBtn" class="secondary">Reiniciar</button>
+    </div>
+
+    <div class="hint">
+      Controles: desliza o toca para mover la pala. También sirven las flechas ← → y A / D.
+      <br><strong>Objetivo:</strong> Atrapa las estrellas que caen. Evita que se pierdan.
+    </div>
+
+    <div style="height:8px"></div>
+
+    <div class="muted">Configuración</div>
+    <div class="row">
+      <label class="muted">Velocidad</label>
+      <input id="speedRange" type="range" min="0.8" max="2.2" step="0.05" value="1">
+    </div>
+
+    <footer>
+      Hecho en un solo archivo • Toca para empezar • Guarda tu puntuación localmente
+    </footer>
+  </aside>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d', {alpha:false});
+  const scoreEl = document.getElementById('score');
+  const bestEl = document.getElementById('best');
+  const livesEl = document.getElementById('lives');
+  const levelEl = document.getElementById('level');
+  const startBtn = document.getElementById('startBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const speedRange = document.getElementById('speedRange');
+
+  // High score storage key
+  const HS_KEY = 'catchy_highscore_v1';
+
+  // Responsive canvas with DPR scaling
+  function resizeCanvas(){
+    const rect = canvas.getBoundingClientRect();
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = rect.height + 'px';
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  // Game state
+  const state = {
+    running: false,
+    paused: false,
+    score: 0,
+    best: +(localStorage.getItem(HS_KEY) || 0),
+    lives: 3,
+    level: 1,
+    spawnTimer: 0,
+    spawnInterval: 800,
+    objects: [],
+    lastTime: 0,
+    playerX: 0.5, // relative 0..1
+    playerWidth: 0.22, // relative
+    gravity: 220, // px per second^2
+    fallSpeedMultiplier: 1,
+  };
+
+  bestEl.textContent = state.best;
+
+  // Audio small beep using WebAudio
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  let audioCtx = null;
+  function beep(freq=440, time=0.06, type='sine', vol=0.08){
+    try {
+      if(!audioCtx) audioCtx = new AudioCtx();
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = type;
+      o.frequency.value = freq;
+      g.gain.value = vol;
+      o.connect(g); g.connect(audioCtx.destination);
+      o.start();
+      o.stop(audioCtx.currentTime + time);
+    } catch(e){}
+  }
+
+  // Helpers
+  function rnd(a,b){ return a + Math.random()*(b-a); }
+  function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+
+  // Create falling object
+  function spawnObject(){
+    const w = rnd(18,36); // px
+    const x = rnd(w/2, canvas.clientWidth - w/2);
+    const speed = rnd(120,220) * state.fallSpeedMultiplier;
+    const type = Math.random() < 0.12 ? 'gold' : 'star'; // gold rarer
+    state.objects.push({x, y:-w, w, speed, type});
+  }
+
+  // Update physics
+  function update(dt){
+    if(!state.running || state.paused) return;
+    state.spawnTimer += dt*1000;
+    const interval = state.spawnInterval / (1 + (state.level-1)*0.08);
+    if(state.spawnTimer > interval){
+      state.spawnTimer = 0;
+      spawnObject();
+    }
+
+    // update objects
+    for(let i = state.objects.length-1; i>=0; --i){
+      const o = state.objects[i];
+      o.y += o.speed * dt;
+      // collision with player paddle (bottom)
+      const paddleY = canvas.clientHeight - 48;
+      const paddleW = state.playerWidth * canvas.clientWidth;
+      const paddleX = state.playerX * canvas.clientWidth - paddleW/2;
+      if(o.y + o.w/2 >= paddleY && o.y - o.w/2 <= paddleY + 28){
+        if(o.x >= paddleX && o.x <= paddleX + paddleW){
+          // caught
+          state.objects.splice(i,1);
+          if(o.type === 'gold'){
+            state.score += 50;
+            beep(880,0.08,'triangle',0.11);
+          } else {
+            state.score += 10;
+            beep(660,0.06,'sine',0.07);
+          }
+          // level up every 200 points
+          const newLevel = Math.floor(state.score / 200) + 1;
+          if(newLevel !== state.level){
+            state.level = newLevel;
+            state.fallSpeedMultiplier *= 1.08;
+            state.spawnInterval *= 0.96;
+            beep(1200,0.12,'sine',0.12);
+          }
+          continue;
+        }
+      }
+      // off bottom -> lose life
+      if(o.y - o.w/2 > canvas.clientHeight){
+        state.objects.splice(i,1);
+        state.lives -= 1;
+        beep(220,0.12,'sawtooth',0.12);
+        if(state.lives <= 0){
+          gameOver();
+        }
+      }
+    }
+  }
+
+  function gameOver(){
+    state.running = false;
+    state.paused = false;
+    if(state.score > state.best){
+      state.best = state.score;
+      localStorage.setItem(HS_KEY, String(state.best));
+      bestEl.textContent = state.best;
+    }
+    // Simple modal-ish prompt via canvas
+    draw(); // final frame
+    setTimeout(()=> {
+      const again = confirm(`Game over\nPuntuación: ${state.score}\nMejor: ${state.best}\n\n¿Jugar otra vez?`);
+      if(again) startGame();
+    }, 150);
+  }
+
+  // Render
+  function draw(){
+    const W = canvas.clientWidth;
+    const H = canvas.clientHeight;
+    // background
+    ctx.fillStyle = '#071428';
+    ctx.fillRect(0,0,W,H);
+
+    // stars background (decorative)
+    for(let i=0;i<60;i++){
+      const gx = (i*37) % W;
+      const gy = (i*53) % H;
+      ctx.fillStyle = i%11==0 ? '#0fb' : 'rgba(255,255,255,0.03)';
+      ctx.fillRect(gx, gy, 1, 1);
+    }
+
+    // draw objects
+    for(const o of state.objects){
+      if(o.type === 'gold'){
+        // gold circle with shine
+        const r = o.w/2;
+        const g = ctx.createRadialGradient(o.x - r*0.3, o.y - r*0.3, r*0.1, o.x, o.y, r);
+        g.addColorStop(0, '#fff9cc');
+        g.addColorStop(0.3, '#ffd166');
+        g.addColorStop(1, '#bb6b00');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(o.x,o.y,r,0,Math.PI*2);
+        ctx.fill();
+      } else {
+        // star shaped
+        drawStar(ctx, o.x, o.y, Math.round(o.w/2), 5);
+      }
+    }
+
+    // player paddle
+    const paddleW = state.playerWidth * W;
+    const paddleH = 18;
+    const paddleX = state.playerX * W - paddleW/2;
+    const paddleY = H - 48;
+    // shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(paddleX, paddleY+8, paddleW, paddleH+6);
+    // paddle
+    const pg = ctx.createLinearGradient(paddleX, paddleY, paddleX, paddleY + paddleH);
+    pg.addColorStop(0, '#ffffff');
+    pg.addColorStop(1, '#ffd166');
+    ctx.fillStyle = pg;
+    roundRect(ctx, paddleX, paddleY, paddleW, paddleH, 10);
+    ctx.fill();
+
+    // HUD overlay minimal
+    ctx.fillStyle = 'rgba(255,255,255,0.03)';
+    ctx.fillRect(12,12,210,52);
+    ctx.fillStyle = '#dbeafe';
+    ctx.font = 'bold 18px system-ui, Arial';
+    ctx.fillText('Catchy', 22, 34);
+    ctx.fillStyle = '#b1c6df';
+    ctx.font = '13px system-ui, Arial';
+    ctx.fillText(`Puntos: ${state.score}`, 22, 50);
+  }
+
+  // Utility drawing helpers
+  function roundRect(ctx,x,y,w,h,r){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    ctx.closePath();
+  }
+  function drawStar(ctx,x,y,r, spikes){
+    const outer = r;
+    const inner = r * 0.5;
+    let rot = Math.PI / 2 * 3;
+    let cx = x;
+    let cy = y;
+    let step = Math.PI / spikes;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - outer);
+    for(let i=0;i<spikes;i++){
+      ctx.lineTo(cx + Math.cos(rot) * outer, cy + Math.sin(rot) * outer);
+      rot += step;
+      ctx.lineTo(cx + Math.cos(rot) * inner, cy + Math.sin(rot) * inner);
+      rot += step;
+    }
+    ctx.closePath();
+    const g = ctx.createLinearGradient(x, y - r, x, y + r);
+    g.addColorStop(0, '#fff');
+    g.addColorStop(0.4, '#9be7ff');
+    g.addColorStop(1, '#6fb3ff');
+    ctx.fillStyle = g;
+    ctx.fill();
+    // small stroke
+    ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  // Main loop
+  function frame(ts){
+    if(!state.lastTime) state.lastTime = ts;
+    const dt = Math.min(0.05, (ts - state.lastTime)/1000);
+    state.lastTime = ts;
+    update(dt);
+    // clear using draw which paints background
+    draw();
+    // Update HUD DOM
+    scoreEl.textContent = state.score;
+    livesEl.textContent = state.lives;
+    levelEl.textContent = state.level;
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // Input handling: pointer (mouse/touch) and keyboard
+  let pointerDown = false;
+  function handlePointer(evt){
+    const rect = canvas.getBoundingClientRect();
+    let clientX;
+    if(evt.touches && evt.touches.length) clientX = evt.touches[0].clientX;
+    else if(evt.clientX !== undefined) clientX = evt.clientX;
+    else return;
+    const relX = clamp((clientX - rect.left) / rect.width, 0, 1);
+    state.playerX = relX;
+  }
+
+  canvas.addEventListener('pointerdown', (e)=>{ pointerDown = true; canvas.setPointerCapture && canvas.setPointerCapture(e.pointerId); handlePointer(e); });
+  canvas.addEventListener('pointermove', (e)=>{ if(pointerDown) handlePointer(e); });
+  canvas.addEventListener('pointerup', (e)=>{ pointerDown = false; canvas.releasePointerCapture && canvas.releasePointerCapture(e.pointerId); });
+  // fallback touch events for some older browsers
+  canvas.addEventListener('touchstart', (e)=>{ pointerDown = true; handlePointer(e); e.preventDefault(); }, {passive:false});
+  canvas.addEventListener('touchmove', (e)=>{ handlePointer(e); e.preventDefault(); }, {passive:false});
+  canvas.addEventListener('touchend', ()=>{ pointerDown = false; });
+
+  // Keyboard
+  let keyLeft=false, keyRight=false;
+  window.addEventListener('keydown', e=>{
+    if(e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A'){ keyLeft=true; }
+    if(e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D'){ keyRight=true; }
+    if(e.key === ' '){ // space toggles pause
+      togglePause();
+    }
+  });
+  window.addEventListener('keyup', e=>{
+    if(e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A'){ keyLeft=false; }
+    if(e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D'){ keyRight=false; }
+  });
+
+  // Smooth keyboard movement
+  setInterval(()=>{
+    if(!state.running || state.paused) return;
+    if(keyLeft) state.playerX = clamp(state.playerX - 0.015, 0, 1);
+    if(keyRight) state.playerX = clamp(state.playerX + 0.015, 0, 1);
+  }, 16);
+
+  // Buttons
+  startBtn.addEventListener('click', ()=> {
+    if(!state.running) startGame();
+    else { state.score += 5; } // small bonus if clicked during run
+  });
+  pauseBtn.addEventListener('click', togglePause);
+  resetBtn.addEventListener('click', resetGame);
+  speedRange.addEventListener('input', ()=> {
+    const v = +speedRange.value;
+    state.fallSpeedMultiplier = v;
+  });
+
+  function startGame(){
+    state.running = true;
+    state.paused = false;
+    state.score = 0;
+    state.lives = 3;
+    state.level = 1;
+    state.spawnTimer = 0;
+    state.spawnInterval = 800;
+    state.objects = [];
+    state.lastTime = 0;
+    state.playerX = 0.5;
+    state.fallSpeedMultiplier = +speedRange.value;
+    startBtn.textContent = 'Jugando...';
+  }
+  function resetGame(){
+    state.running = false;
+    state.paused = false;
+    state.score = 0;
+    state.lives = 3;
+    state.level = 1;
+    state.spawnTimer = 0;
+    state.spawnInterval = 800;
+    state.objects = [];
+    state.playerX = 0.5;
+    startBtn.textContent = 'Iniciar';
+    beep(440,0.06,'sine',0.06);
+  }
+  function togglePause(){
+    if(!state.running) return;
+    state.paused = !state.paused;
+    pauseBtn.textContent = state.paused ? 'Reanudar' : 'Pausar';
+    beep(state.paused ? 240 : 660, 0.06, 'sine', 0.06);
+  }
+
+  // Start with a tiny intro animation once
+  (function intro(){
+    const t0 = performance.now();
+    let introAnim = true;
+    function step(ts){
+      const p = Math.min(1, (ts - t0) / 900);
+      // draw background with overlay text
+      ctx.fillStyle = '#071428';
+      ctx.fillRect(0,0,canvas.clientWidth,canvas.clientHeight);
+      ctx.fillStyle = 'rgba(11,17,30,' + (0.7*(1-p)) + ')';
+      ctx.fillRect(0,0,canvas.clientWidth,canvas.clientHeight);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 28px system-ui, Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('Catchy', canvas.clientWidth/2, canvas.clientHeight/2 - 10);
+      ctx.font = '15px system-ui, Arial';
+      ctx.fillStyle = '#cde6ff';
+      ctx.fillText('Toca / Arrastra para mover • Pulsa Iniciar', canvas.clientWidth/2, canvas.clientHeight/2 + 18);
+      if(p < 1) requestAnimationFrame(step);
+      else introAnim = false;
+    }
+    requestAnimationFrame(step);
+  })();
+
+})();
+</script>
+</body>
+</html>
